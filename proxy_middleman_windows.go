@@ -19,9 +19,9 @@ func proxyMiddleman() func(req *http.Request) (i *url.URL, e error) {
 
 	return func(req *http.Request) (i *url.URL, e error) {
 		if conf.Automatic.Active {
-			host := conf.Automatic.FindProxyForURL(req.URL.String())
-			if host != "" {
-				return &url.URL{Host: host}, nil
+			urlStr := conf.Automatic.FindProxyForURL(req.URL.String())
+			if urlStr != "" {
+				return url.Parse(urlStr)
 			}
 		}
 		if conf.Static.Active {

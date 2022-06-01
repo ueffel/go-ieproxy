@@ -2,12 +2,18 @@ package ieproxy
 
 import "golang.org/x/sys/windows"
 
-var winHttp = windows.NewLazySystemDLL("winhttp.dll")
-var winHttpGetProxyForURL = winHttp.NewProc("WinHttpGetProxyForUrl")
-var winHttpOpen = winHttp.NewProc("WinHttpOpen")
-var winHttpCloseHandle = winHttp.NewProc("WinHttpCloseHandle")
-var winHttpGetIEProxyConfigForCurrentUser = winHttp.NewProc("WinHttpGetIEProxyConfigForCurrentUser")
-var winHttpGetDefaultProxyConfiguration = winHttp.NewProc("WinHttpGetDefaultProxyConfiguration")
+var (
+	winHttp                               = windows.NewLazySystemDLL("winhttp.dll")
+	winHttpOpen                           = winHttp.NewProc("WinHttpOpen")
+	winHttpCloseHandle                    = winHttp.NewProc("WinHttpCloseHandle")
+	winHttpGetIEProxyConfigForCurrentUser = winHttp.NewProc("WinHttpGetIEProxyConfigForCurrentUser")
+	winHttpGetDefaultProxyConfiguration   = winHttp.NewProc("WinHttpGetDefaultProxyConfiguration")
+	winHttpGetProxyForURLEx               = winHttp.NewProc("WinHttpGetProxyForUrlEx")
+	winHttpSetStatusCallback              = winHttp.NewProc("WinHttpSetStatusCallback")
+	winHttpCreateProxyResolver            = winHttp.NewProc("WinHttpCreateProxyResolver")
+	winHttpGetProxyResult                 = winHttp.NewProc("WinHttpGetProxyResult")
+	winHttpFreeProxyResult                = winHttp.NewProc("WinHttpFreeProxyResult")
+)
 
 type tWINHTTP_AUTOPROXY_OPTIONS struct {
 	dwFlags                autoProxyFlag
@@ -30,6 +36,12 @@ const (
 	fWINHTTP_AUTOPROXY_SORT_RESULTS        = autoProxyFlag(0x00400000)
 )
 
+const (
+	fWINHTTP_FLAG_ASYNC                            = uint32(0x10000000)
+	fWINHTTP_CALLBACK_FLAG_REQUEST_ERROR           = uint32(0x00200000)
+	fWINHTTP_CALLBACK_FLAG_GETPROXYFORURL_COMPLETE = uint32(0x01000000)
+)
+
 type autoDetectFlag uint32
 
 const (
@@ -48,4 +60,19 @@ type tWINHTTP_CURRENT_USER_IE_PROXY_CONFIG struct {
 	lpszAutoConfigUrl *uint16
 	lpszProxy         *uint16
 	lpszProxyBypass   *uint16
+}
+
+type tWINHTTP_PROXY_RESULT struct {
+	cEntries uint32
+	pEntries *tWINHTTP_PROXY_RESULT_ENTRY
+}
+
+type tWINHTTP_PROXY_RESULT_ENTRY struct {
+	fProxy      bool
+	_           [3]byte // Padding so struct alignment is correct
+	fByPass     bool
+	_           [3]byte // Padding so struct alignment is correct
+	ProxyScheme uint16
+	pwszProxy   *uint16
+	ProxyPort   uint16
 }

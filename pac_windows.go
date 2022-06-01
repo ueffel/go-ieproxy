@@ -1,38 +1,79 @@
 package ieproxy
 
+import "C" // Needed so the WinHttpSetStatusCallback can actually be called. See https://github.com/golang/go/issues/10973
+
 import (
-	"strings"
+	"fmt"
+	"sync"
 	"syscall"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 func (psc *ProxyScriptConf) findProxyForURL(URL string) string {
 	if !psc.Active {
 		return ""
 	}
-	proxy, _ := getProxyForURL(psc.PreConfiguredURL, URL)
-	i := strings.Index(proxy, ";")
-	if i >= 0 {
-		return proxy[:i]
+	scheme, proxy, port, err := getProxyForURLEx(psc.PreConfiguredURL, URL)
+	if err != nil {
+		return ""
 	}
-	return proxy
+	switch scheme {
+	case 1:
+		return fmt.Sprintf("http://%s:%d", proxy, port)
+	case 2:
+		return fmt.Sprintf("https://%s:%d", proxy, port)
+	case 4:
+		return fmt.Sprintf("socks5://%s:%d", proxy, port)
+	default:
+		return ""
+	}
 }
 
-func getProxyForURL(pacfileURL, URL string) (string, error) {
+func StatusCallback(
+	hInternet uintptr,
+	dwContext *sync.WaitGroup,
+	dwInternetStatus uint32,
+	lpvStatusInformation uintptr,
+	dwStatusInformationLength uint32,
+) uintptr {
+	dwContext.Done()
+	return 0
+}
+
+func getProxyForURLEx(pacfileURL, URL string) (uint16, string, uint16, error) {
 	pacfileURLPtr, err := syscall.UTF16PtrFromString(pacfileURL)
 	if err != nil {
-		return "", err
+		return 0, "", 0, err
 	}
 	URLPtr, err := syscall.UTF16PtrFromString(URL)
 	if err != nil {
-		return "", err
+		return 0, "", 0, err
 	}
 
-	handle, _, err := winHttpOpen.Call(0, 0, 0, 0, 0)
+	handle, _, err := winHttpOpen.Call(0, 0, 0, 0, uintptr(fWINHTTP_FLAG_ASYNC))
 	if handle == 0 {
-		return "", err
+		return 0, "", 0, err
 	}
 	defer winHttpCloseHandle.Call(handle)
+
+	cb := syscall.NewCallback(StatusCallback)
+	ret, _, err := winHttpSetStatusCallback.Call(
+		handle,
+		cb,
+		uintptr(fWINHTTP_CALLBACK_FLAG_REQUEST_ERROR|fWINHTTP_CALLBACK_FLAG_GETPROXYFORURL_COMPLETE),
+		0)
+	if ret != 0 {
+		return 0, "", 0, err
+	}
+
+	resolver := uintptr(0)
+	ret, _, err = winHttpCreateProxyResolver.Call(handle, uintptr(unsafe.Pointer(&resolver)))
+	if ret != 0 {
+		return 0, "", 0, err
+	}
+	defer winHttpCloseHandle.Call(resolver)
 
 	dwFlags := fWINHTTP_AUTOPROXY_CONFIG_URL
 	dwAutoDetectFlags := autoDetectFlag(0)
@@ -54,19 +95,29 @@ func getProxyForURL(pacfileURL, URL string) (string, error) {
 	} // lpszProxyBypass isn't used as this only executes in cases where there (may) be a pac file (autodetect can fail), where lpszProxyBypass couldn't be returned.
 	// in the case that autodetect fails and no pre-specified pacfile is present, no proxy is returned.
 
-	info := new(tWINHTTP_PROXY_INFO)
-
-	ret, _, err := winHttpGetProxyForURL.Call(
-		handle,
+	wait := &sync.WaitGroup{}
+	wait.Add(1)
+	ret, _, err = winHttpGetProxyForURLEx.Call(
+		resolver,
 		uintptr(unsafe.Pointer(URLPtr)),
 		uintptr(unsafe.Pointer(&options)),
-		uintptr(unsafe.Pointer(info)),
-	)
-	if ret > 0 {
-		err = nil
+		uintptr(unsafe.Pointer(wait)))
+	if ret != uintptr(windows.ERROR_IO_PENDING) {
+		return 0, "", 0, err
+	}
+	wait.Wait()
+
+	proxyResult := &tWINHTTP_PROXY_RESULT{}
+	ret, _, err = winHttpGetProxyResult.Call(resolver, uintptr(unsafe.Pointer(proxyResult)))
+	if ret != 0 {
+		return 0, "", 0, err
+	}
+	defer winHttpFreeProxyResult.Call(uintptr(unsafe.Pointer(proxyResult)))
+
+	entries := unsafe.Slice(proxyResult.pEntries, proxyResult.cEntries)
+	if len(entries) > 0 && entries[0].fProxy {
+		return entries[0].ProxyScheme, StringFromUTF16Ptr(entries[0].pwszProxy), entries[0].ProxyPort, nil
 	}
 
-	defer globalFreeWrapper(info.lpszProxyBypass)
-	defer globalFreeWrapper(info.lpszProxy)
-	return StringFromUTF16Ptr(info.lpszProxy), err
+	return 0, "", 0, err
 }
