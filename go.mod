@@ -1,4 +1,4 @@
-module github.com/mattn/go-ieproxy
+module github.com/ueffel/go-ieproxy
 
 go 1.18
 
