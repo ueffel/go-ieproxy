@@ -4,6 +4,7 @@ import "C" // Needed so the WinHttpSetStatusCallback can actually be called. See
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -21,11 +22,13 @@ func (psc *ProxyScriptConf) findProxyForURL(URL string) string {
 	}
 	switch scheme {
 	case 1:
-		return fmt.Sprintf("http://%s:%d", proxy, port)
+		return fmt.Sprint("http://", proxy, ":", port)
 	case 2:
-		return fmt.Sprintf("https://%s:%d", proxy, port)
+		return fmt.Sprint("https://", proxy, ":", port)
 	case 4:
-		return fmt.Sprintf("socks5://%s:%d", proxy, port)
+		proxy = strings.TrimPrefix(proxy, "4 ") // SOCKS4 proxy.ip:port
+		proxy = strings.TrimPrefix(proxy, "5 ") // SOCKS5 proxy.ip:port
+		return fmt.Sprint("socks5://", proxy, ":", port)
 	default:
 		return ""
 	}
