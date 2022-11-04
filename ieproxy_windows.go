@@ -1,10 +1,13 @@
 package ieproxy
 
 import (
+	"context"
 	"strings"
 	"sync"
+	"syscall"
 	"unsafe"
 
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
 
@@ -15,8 +18,10 @@ type regeditValues struct {
 	AutoConfigURL string
 }
 
-var once sync.Once
-var windowsProxyConf ProxyConf
+var (
+	once             sync.Once
+	windowsProxyConf ProxyConf
+)
 
 // GetConf retrieves the proxy configuration from the Windows Regedit
 func getConf() ProxyConf {
@@ -173,11 +178,11 @@ func readRegedit() (values regeditValues, err error) {
 	var proxySettingsPerUser uint64 = 1 // 1 is the default value to consider current user
 	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `Software\Policies\Microsoft\Windows\CurrentVersion\Internet Settings`, registry.QUERY_VALUE)
 	if err == nil {
-		//We had used the below variable tempPrxUsrSettings, because the Golang method GetIntegerValue
-		//sets the value to zero even it fails.
+		// We had used the below variable tempPrxUsrSettings, because the Golang method GetIntegerValue
+		// sets the value to zero even it fails.
 		tempPrxUsrSettings, _, err := k.GetIntegerValue("ProxySettingsPerUser")
 		if err == nil {
-			//consider the value of tempPrxUsrSettings if it is a success
+			// consider the value of tempPrxUsrSettings if it is a success
 			proxySettingsPerUser = tempPrxUsrSettings
 		}
 		k.Close()
@@ -216,4 +221,131 @@ func readRegedit() (values regeditValues, err error) {
 	}
 	err = nil
 	return
+}
+
+var (
+	detectCtx    context.Context
+	detectCancel context.CancelFunc
+	cancelEvent  windows.Handle
+	detectError  error
+)
+
+// DetectChanges starts listening for changes to the proxy settings. If there
+// are changes, the settings are automatically reloaded. If there any errors
+// setting up the listening they are returned. A nil error signals successful
+// initialisation. The returned context can be checked if listening is still
+// running.
+//
+//	select {
+//	case <-ctx.Done():
+//		// canceled
+//	default:
+//		// still listening
+//
+// or
+//
+//	if ctx.Err() != nil {
+//		// canceled
+//	}
+//
+// If context is canceled, listening exited probably due to an error. Check
+// DetectError().
+func DetectChanges() (context.Context, error) {
+	initDone := make(chan error, 1)
+	defer close(initDone)
+
+	detectCtx, detectCancel = context.WithCancel(context.Background())
+	detectError = nil
+
+	go listenForChanges(initDone)
+
+	return detectCtx, <-initDone
+}
+
+func listenForChanges(initDone chan<- error) {
+	defer StopDetectChanges()
+
+	key, err := registry.OpenKey(windows.HKEY_CURRENT_USER,
+		`Software\Microsoft\Windows\CurrentVersion\Internet Settings`,
+		syscall.KEY_NOTIFY)
+	if err != nil {
+		initDone <- err
+		return
+	}
+	defer key.Close()
+
+	regEvent, err := windows.CreateEvent(nil, 0, 0, nil)
+	if err != nil {
+		initDone <- err
+		return
+	}
+	defer windows.Close(regEvent)
+
+	cancelEvent, err = windows.CreateEvent(nil, 1, 0, nil)
+	if err != nil {
+		initDone <- err
+		return
+	}
+	defer func() {
+		_ = windows.Close(cancelEvent)
+		cancelEvent = 0
+	}()
+
+	initDone <- nil
+	for {
+		if detectCtx.Err() != nil {
+			return
+		}
+
+		err := windows.RegNotifyChangeKeyValue(windows.Handle(key),
+			true,
+			windows.REG_NOTIFY_CHANGE_LAST_SET,
+			regEvent,
+			true)
+		if err != nil {
+			detectError = err
+			return
+		}
+
+		evt, err := windows.WaitForMultipleObjects([]windows.Handle{regEvent, cancelEvent}, false, windows.INFINITE)
+		if err != nil {
+			detectError = nil
+			return
+		}
+		switch evt {
+		case windows.WAIT_OBJECT_0 + 0: // regEvent
+			_ = reloadConf()
+		case windows.WAIT_OBJECT_0 + 1: // cancelEvent
+			// just exit
+			return
+		default: // including WAIT_ABANDONED_0, WAIT_TIMEOUT
+			// something weird happened, better exit
+			return
+		}
+	}
+}
+
+// StopDetectChanges stop listening for changes to the proxy settings. This
+// function does nothing if DetectChanges wasn't called before.
+func StopDetectChanges() error {
+	if detectCancel != nil {
+		detectCancel()
+	}
+	if cancelEvent != 0 {
+		// signal event
+		err := windows.SetEvent(cancelEvent)
+		if err != nil {
+			return err
+		}
+	}
+	_ = windows.Close(cancelEvent)
+	cancelEvent = 0
+
+	return nil
+}
+
+// DetectError returns the error that occurred while listening for proxy setting
+// changes (see DetectChanges).
+func DetectError() error {
+	return detectError
 }
