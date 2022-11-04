@@ -8,8 +8,6 @@ import (
 )
 
 func proxyMiddleman() func(req *http.Request) (i *url.URL, e error) {
-	// Get the proxy configuration
-	conf := GetConf()
 	envCfg := httpproxy.FromEnvironment()
 
 	if envCfg.HTTPProxy != "" || envCfg.HTTPSProxy != "" {
@@ -18,6 +16,8 @@ func proxyMiddleman() func(req *http.Request) (i *url.URL, e error) {
 	}
 
 	return func(req *http.Request) (i *url.URL, e error) {
+		// Get the proxy configuration
+		conf := GetConf()
 		if conf.Automatic.Active {
 			host := conf.Automatic.FindProxyForURL(req.URL.String())
 			if host != "" {
