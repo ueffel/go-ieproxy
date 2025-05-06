@@ -1,10 +1,10 @@
 module github.com/ueffel/go-ieproxy
 
-go 1.18
+go 1.24
 
 require (
-	golang.org/x/net v0.25.0
-	golang.org/x/sys v0.20.0
+	golang.org/x/net v0.40.0
+	golang.org/x/sys v0.33.0
 )
 
-require golang.org/x/text v0.15.0 // indirect
+require golang.org/x/text v0.25.0 // indirect
