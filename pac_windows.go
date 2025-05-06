@@ -26,7 +26,11 @@ func (psc *ProxyScriptConf) findProxyForURL(URL string) string {
 	case 2:
 		return fmt.Sprint("https://", proxy, ":", port)
 	case 4:
-		proxy = strings.TrimPrefix(proxy, "4 ") // SOCKS4 proxy.ip:port
+		// SOCKS4 proxy.ip:port
+		if strings.HasPrefix(proxy, "4 ") {
+			// not supported
+			return ""
+		}
 		proxy = strings.TrimPrefix(proxy, "5 ") // SOCKS5 proxy.ip:port
 		return fmt.Sprint("socks5://", proxy, ":", port)
 	default:

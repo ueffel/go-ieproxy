@@ -266,7 +266,7 @@ func listenForChanges(initDone chan<- error) {
 	defer StopDetectChanges()
 
 	key, err := registry.OpenKey(windows.HKEY_CURRENT_USER,
-		`Software\Microsoft\Windows\CurrentVersion\Internet Settings`,
+		`SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings`,
 		syscall.KEY_NOTIFY)
 	if err != nil {
 		initDone <- err
